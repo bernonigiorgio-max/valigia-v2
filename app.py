@@ -4,7 +4,7 @@ from datetime import datetime, date
 import requests
 
 # CONFIGURAZIONE PAGINA
-st.set_page_config(page_title="Valigia Smart v2.6 - Famiglia Giorgio", layout="wide")
+st.set_page_config(page_title="Valigia Smart v2.7 - Famiglia Giorgio", layout="wide")
 
 # 1. FUNZIONE METEO AUTOMATICO
 def get_weather_forecast(citta):
@@ -37,7 +37,7 @@ def load_data():
 df_master = load_data()
 
 if df_master is not None:
-    # --- SIDEBAR: PARAMETRI FISSI ---
+    # --- SIDEBAR: TUTTO IL SETUP A SINISTRA ---
     st.sidebar.header("📋 Setup Viaggio")
     citta = st.sidebar.text_input("Destinazione", "Alassio")
     d_inizio = st.sidebar.date_input("Data Arrivo", date.today())
@@ -51,15 +51,61 @@ if df_master is not None:
     alloggio = st.sidebar.radio("Soggiorno", ["Hotel", "Appartamento"])
     cane_presente = st.sidebar.toggle("Il cane viene con noi?", value=True)
     
-    # --- RECUPERO METEO AUTOMATICO (PER SUGGERIMENTO) ---
+    st.sidebar.divider()
+    # --- METEO MANUALE NELLA SIDEBAR (SOTTO IL CANE) ---
+    st.sidebar.subheader("🌦️ Controllo Meteo")
+    
+    # Recupero suggerimento automatico
     meteo_auto = get_weather_forecast(citta)
     p_suggerita = False
     v_suggerito = "Debole"
-    
     if meteo_auto:
         p_suggerita = max(meteo_auto['precipitation_probability_max']) > 30
         v_max_auto = max(meteo_auto['wind_speed_10m_max'])
         v_suggerito = "Forte" if v_max_auto > 30 else ("Medio" if v_max_auto > 15 else "Debole")
+        st.sidebar.caption(f"Previsione: {'Pioggia' if p_suggerita else 'Sole'}, Vento {v_suggerito}")
+
+    override_cielo = st.sidebar.multiselect("Cielo (manuale):", ["Sole", "Nuvole", "Pioggia"], 
+                                           default=["Pioggia"] if p_suggerita else ["Sole"])
+    override_vento = st.sidebar.select_slider("Vento (manuale):", options=["Debole", "Medio", "Forte"], 
+                                             value=v_suggerito)
+    pioggia_attiva = "Pioggia" in override_cielo
+
+    # --- MOTORE DI CALCOLO DINAMICO ---
+    def calcola_final(row, giorni, pioggia_on, vento_livello, cane_ok):
+        ogg = str(row['Oggetto']).lower()
+        prop = str(row['Proprietario']).lower()
+        
+        # 1. Filtro Cane
+        if not cane_ok and ("cane" in prop or "cane:" in ogg):
+            return 0
+        
+        # 2. Filtro Alloggio
+        tipo_casa = str(row.get('Hotel / Appartamento / Entrambi', 'Entrambi')).strip()
+        if alloggio == "Hotel" and tipo_casa == "Appartamento": return 0
+        if alloggio == "Appartamento" and tipo_casa == "Hotel": return 0
+        
+        # 3. Filtro Contesto
+        contesto_row = str(row.get('Tipo viaggio / Contesto', 'Tutti'))
+        if "Mare" in contesto_row and tipo_v != "Mare": return 0
+        if "Montagna" in contesto_row and tipo_v != "Montagna": return 0
+        
+        # 4. Quantità basate sui giorni
+        if "mutande" in ogg or "calze" in ogg: return giorni + 1
+        if "magliette maniche corte" in ogg:
+            # Maglie extra per le bambine
+            return giorni + 2 if ("ilaria" in prop or "emma" in prop) else giorni
+        
+        # 5. Logica Meteo Manuale
+        if ("k-way" in ogg or "ombrellino" in ogg) and not pioggia_on: return 0
+        if "ombrellone" in ogg and vento_livello == "Forte": return 0
+
+        # Valore manuale da Excel
+        try:
+            val = row['Quantità']
+            if pd.isnull(val) or val == "" or val == "-1": return 1
+            return int(val)
+        except: return 1
 
     # --- INTERFACCIA PRINCIPALE ---
     st.title(f"🧳 Valigia Smart per {citta}")
@@ -78,79 +124,36 @@ if df_master is not None:
 
     # FILTRO PIANI
     piani = sorted([str(p) for p in df_master['Posiz. piano'].unique() if pd.notnull(p)])
-    f_piano = st.multiselect("📍 Filtra per Piano:", piani, default=piani)
+    f_piano = st.multiselect("📍 Filtra per Piano (es. svuota la Taverna):", piani, default=piani)
 
-    # --- MOTORE DI CALCOLO DINAMICO ---
-    def calcola_final(row, giorni, pioggia_on, vento_livello, cane_ok):
-        ogg = str(row['Oggetto']).lower()
-        prop = str(row['Proprietario']).lower()
-        
-        # Filtro Cane
-        if not cane_ok and ("cane" in prop or "cane:" in ogg): return 0
-        
-        # Filtro Alloggio
-        tipo_casa = str(row.get('Hotel / Appartamento / Entrambi', 'Entrambi')).strip()
-        if alloggio == "Hotel" and tipo_casa == "Appartamento": return 0
-        if alloggio == "Appartamento" and tipo_casa == "Hotel": return 0
-        
-        # Filtro Contesto
-        contesto_row = str(row.get('Tipo viaggio / Contesto', 'Tutti'))
-        if "Mare" in contesto_row and tipo_v != "Mare": return 0
-        if "Montagna" in contesto_row and tipo_v != "Montagna": return 0
-        
-        # Quantità
-        if "mutande" in ogg or "calze" in ogg: return giorni + 1
-        if "magliette maniche corte" in ogg:
-            return giorni + 2 if ("ilaria" in prop or "emma" in prop) else giorni
-        
-        # Meteo Override
-        if ("k-way" in ogg or "ombrellino" in ogg) and not pioggia_on: return 0
-        if "ombrellone" in ogg and vento_livello == "Forte": return 0
+    # APPLICAZIONE CALCOLO
+    df_master['Quantità_Calc'] = df_master.apply(
+        lambda x: calcola_final(x, giorni, pioggia_attiva, override_vento, cane_presente), axis=1
+    )
+    
+    # VISUALIZZAZIONE TABELLE
+    tabs = st.tabs(["🕺 Giorgio", "💃 Olga", "👧 Ilaria", "👶 Emma", "🏠 Comune & Cane"])
+    nomi_p = ["Giorgio", "Olga", "Ilaria", "Emma", "Comune"]
 
-        try:
-            val = row['Quantità']
-            return int(val) if pd.notnull(val) and val != "" else 1
-        except: return 1
-
-    # --- LAYOUT: METEO A SINISTRA, TABELLE A DESTRA ---
-    side_weather, main_tabs = st.columns([1, 4])
-
-    with side_weather:
-        st.subheader("🌦️ Meteo")
-        st.info(f"Auto: {'Pioggia' if p_suggerita else 'Sole'}, Vento {v_suggerito}")
-        override_cielo = st.multiselect("Condizioni:", ["Sole", "Nuvole", "Pioggia"], 
-                                       default=["Pioggia"] if p_suggerita else ["Sole"])
-        override_vento = st.select_slider("Vento:", options=["Debole", "Medio", "Forte"], 
-                                         value=v_suggerito)
-        pioggia_attiva = "Pioggia" in override_cielo
-
-    with main_tabs:
-        df_master['Quantità_Calc'] = df_master.apply(
-            lambda x: calcola_final(x, giorni, pioggia_attiva, override_vento, cane_presente), axis=1
-        )
-        
-        tabs = st.tabs(["🕺 Giorgio", "💃 Olga", "👧 Ilaria", "👶 Emma", "🏠 Comune & Cane"])
-        nomi_p = ["Giorgio", "Olga", "Ilaria", "Emma", "Comune"]
-
-        for i, tab in enumerate(tabs):
-            with tab:
-                nome_t = nomi_p[i]
-                if nome_t == "Comune":
-                    mask = (df_master['Proprietario'] == 'Comune') | (df_master['Proprietario'].str.contains('Cane', na=False, case=False))
-                else:
-                    mask = (df_master['Proprietario'] == nome_t) | (df_master['Proprietario'] == 'Ciascuno')
-                
-                df_tab = df_master[mask & df_master['Posiz. piano'].astype(str).isin(f_piano)].copy()
-                df_tab['Stato'] = "⚪ Da fare"
-                
-                st.data_editor(
-                    df_tab[['Stato', 'Oggetto', 'Quantità_Calc', 'Posiz. piano', 'Note']],
-                    column_config={
-                        "Stato": st.column_config.SelectboxColumn("Stato", 
-                            options=["⚪ Da fare", "🟠 In parte", "🟡 Ultimo min", "🔴 Zero", "🟢 FATTO"]),
-                        "Quantità_Calc": "Q.tà",
-                        "Posiz. piano": "Piano",
-                        "Oggetto": st.column_config.TextColumn("Oggetto", disabled=True)
-                    },
-                    hide_index=True, use_container_width=True, key=f"ed_{nome_t}"
-                )
+    for i, tab in enumerate(tabs):
+        with tab:
+            nome_t = nomi_p[i]
+            if nome_t == "Comune":
+                mask = (df_master['Proprietario'] == 'Comune') | (df_master['Proprietario'].str.contains('Cane', na=False, case=False))
+            else:
+                mask = (df_master['Proprietario'] == nome_t) | (df_master['Proprietario'] == 'Ciascuno')
+            
+            df_tab = df_master[mask & df_master['Posiz. piano'].astype(str).isin(f_piano)].copy()
+            df_tab['Stato'] = "⚪ Da fare"
+            
+            st.data_editor(
+                df_tab[['Stato', 'Oggetto', 'Quantità_Calc', 'Posiz. piano', 'Note']],
+                column_config={
+                    "Stato": st.column_config.SelectboxColumn("Stato", 
+                        options=["⚪ Da fare", "🟠 In parte", "🟡 Ultimo min", "🔴 Zero", "🟢 FATTO"]),
+                    "Quantità_Calc": "Q.tà",
+                    "Posiz. piano": "Piano",
+                    "Oggetto": st.column_config.TextColumn("Oggetto", disabled=True)
+                },
+                hide_index=True, use_container_width=True, key=f"ed_{nome_t}"
+            )
