@@ -4,7 +4,7 @@ from datetime import datetime, date
 import requests
 
 # CONFIGURAZIONE PAGINA
-st.set_page_config(page_title="Valigia Smart v2.0 - Famiglia Giorgio", layout="wide")
+st.set_page_config(page_title="Valigia Smart v2.2 - Famiglia Giorgio", layout="wide")
 
 # 1. FUNZIONE METEO (Open-Meteo: Gratis, No API Key)
 def get_weather_forecast(citta):
@@ -24,7 +24,6 @@ def get_weather_forecast(citta):
 @st.cache_data
 def load_data():
     try:
-        # Caricamento file richiesto: Per viaggiare.csv
         df = pd.read_csv("Per viaggiare.csv", sep=";")
         df.columns = df.columns.str.strip()
         if 'Oggetto' not in df.columns and 's' in df.columns:
@@ -49,6 +48,7 @@ if df_master is not None:
     st.sidebar.divider()
     tipo_v = st.sidebar.selectbox("Contesto", ["Mare", "Montagna", "Città"])
     alloggio = st.sidebar.radio("Soggiorno", ["Hotel", "Appartamento"])
+    cane_presente = st.sidebar.toggle("Il cane viene con noi?", value=True)
     
     # --- ELABORAZIONE METEO ---
     meteo_info = get_weather_forecast(citta)
@@ -63,20 +63,24 @@ if df_master is not None:
     st.sidebar.info(f"☀️ Meteo previsto: {t_max}°C | 🌬️ Vento: {vento_descr} | 🌧️ Pioggia: {'Sì' if pioggia else 'No'}")
 
     # --- MOTORE DI CALCOLO ---
-    def calcola_smart(row, giorni, pioggia, vento):
-        # Filtro Hotel / Appartamento (Logica Rigida)
+    def calcola_smart(row, giorni, pioggia, vento, cane_ok):
+        # 1. Filtro Cane (Logica Nuova)
+        prop = str(row['Proprietario'])
+        if "Cane" in prop and not cane_ok: return 0
+        
+        # 2. Filtro Hotel / Appartamento
         tipo_casa = str(row.get('Hotel / Appartamento / Entrambi', 'Entrambi')).strip()
         if alloggio == "Hotel" and tipo_casa == "Appartamento": return 0
         if alloggio == "Appartamento" and tipo_casa == "Hotel": return 0
         
-        # Filtro Contesto
+        # 3. Filtro Contesto
         contesto_row = str(row.get('Tipo viaggio / Contesto', 'Tutti'))
         if "Mare" in contesto_row and tipo_v != "Mare": return 0
         if "Montagna" in contesto_row and tipo_v != "Montagna": return 0
         
         ogg = str(row['Oggetto']).lower()
-        prop = str(row['Proprietario'])
         
+        # 4. Quantità Dinamiche
         if "mutande" in ogg or "calze" in ogg: return giorni + 1
         if "magliette maniche corte" in ogg:
             return giorni + 2 if ("Ilaria" in prop or "Emma" in prop) else giorni
@@ -84,17 +88,18 @@ if df_master is not None:
         if ("k-way" in ogg or "ombrellino" in ogg) and not pioggia: return 0
         if "ombrellone" in ogg and vento == "Forte": return 0
 
+        # Valore manuale da Excel
         try:
             val = row['Quantità']
             return int(val) if pd.notnull(val) else 1
         except: return 1
 
-    df_master['Quantità_Calc'] = df_master.apply(lambda x: calcola_smart(x, giorni, pioggia, vento_descr), axis=1)
+    df_master['Quantità_Calc'] = df_master.apply(lambda x: calcola_smart(x, giorni, pioggia, vento_descr, cane_presente), axis=1)
 
     # --- INTERFACCIA PRINCIPALE ---
     st.title(f"🧳 Valigia Smart: {citta}")
     
-    # SEZIONE RACCOMANDAZIONI (Fisse come richiesto)
+    # SEZIONE RACCOMANDAZIONI (Richiesta specifica)
     with st.expander("🚨 RACCOMANDAZIONI PRE-PARTENZA (Check-list Casa)", expanded=True):
         col1, col2 = st.columns(2)
         racc = [
@@ -118,6 +123,7 @@ if df_master is not None:
         with tab:
             nome = nomi_p[i]
             if nome == "Comune":
+                # Mostra solo se proprietario è Comune o Cane (se il cane viene)
                 mask = (df_master['Proprietario'] == 'Comune') | (df_master['Proprietario'].str.contains('Cane', na=False, case=False))
             else:
                 mask = (df_master['Proprietario'] == nome) | (df_master['Proprietario'] == 'Ciascuno')
