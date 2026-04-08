@@ -4,9 +4,9 @@ from datetime import datetime, date
 import requests
 
 # CONFIGURAZIONE PAGINA
-st.set_page_config(page_title="Valigia Smart v2.2 - Famiglia Giorgio", layout="wide")
+st.set_page_config(page_title="Valigia Smart v2.3 - Famiglia Giorgio", layout="wide")
 
-# 1. FUNZIONE METEO (Open-Meteo: Gratis, No API Key)
+# 1. FUNZIONE METEO (Affidabile e senza chiavi API complicate)
 def get_weather_forecast(citta):
     try:
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={citta}&count=1&language=it&format=json"
@@ -24,6 +24,7 @@ def get_weather_forecast(citta):
 @st.cache_data
 def load_data():
     try:
+        # File richiesto: Per viaggiare.csv (separatore ;)
         df = pd.read_csv("Per viaggiare.csv", sep=";")
         df.columns = df.columns.str.strip()
         if 'Oggetto' not in df.columns and 's' in df.columns:
@@ -62,71 +63,79 @@ if df_master is not None:
 
     st.sidebar.info(f"☀️ Meteo previsto: {t_max}°C | 🌬️ Vento: {vento_descr} | 🌧️ Pioggia: {'Sì' if pioggia else 'No'}")
 
-    # --- MOTORE DI CALCOLO ---
+    # --- MOTORE DI CALCOLO (CORRETTO) ---
     def calcola_smart(row, giorni, pioggia, vento, cane_ok):
-        # 1. Filtro Cane (Logica Nuova)
-        prop = str(row['Proprietario'])
-        if "Cane" in prop and not cane_ok: return 0
+        ogg = str(row['Oggetto']).lower()
+        prop = str(row['Proprietario']).lower()
         
-        # 2. Filtro Hotel / Appartamento
+        # PRIORITÀ 1: IL CANE (Se il flag è spento, azzera tutto ciò che contiene "cane")
+        if not cane_ok:
+            if "cane" in prop or "cane:" in ogg:
+                return 0
+        
+        # PRIORITÀ 2: ALLOGGIO (Hotel vs Appartamento)
         tipo_casa = str(row.get('Hotel / Appartamento / Entrambi', 'Entrambi')).strip()
         if alloggio == "Hotel" and tipo_casa == "Appartamento": return 0
         if alloggio == "Appartamento" and tipo_casa == "Hotel": return 0
         
-        # 3. Filtro Contesto
+        # PRIORITÀ 3: CONTESTO (Mare vs Montagna)
         contesto_row = str(row.get('Tipo viaggio / Contesto', 'Tutti'))
         if "Mare" in contesto_row and tipo_v != "Mare": return 0
         if "Montagna" in contesto_row and tipo_v != "Montagna": return 0
         
-        ogg = str(row['Oggetto']).lower()
-        
-        # 4. Quantità Dinamiche
+        # PRIORITÀ 4: QUANTITÀ DINAMICHE
         if "mutande" in ogg or "calze" in ogg: return giorni + 1
         if "magliette maniche corte" in ogg:
-            return giorni + 2 if ("Ilaria" in prop or "Emma" in prop) else giorni
+            # Bambine ricambio extra
+            return giorni + 2 if ("ilaria" in prop or "emma" in prop) else giorni
         
+        # PRIORITÀ 5: METEO
         if ("k-way" in ogg or "ombrellino" in ogg) and not pioggia: return 0
         if "ombrellone" in ogg and vento == "Forte": return 0
 
-        # Valore manuale da Excel
+        # Se nessuna regola dinamica scatta, usa il valore Excel o 1
         try:
             val = row['Quantità']
-            return int(val) if pd.notnull(val) else 1
+            # Se la cella è vuota o non è un numero, mette 1
+            if pd.isnull(val) or val == "": return 1
+            return int(val)
         except: return 1
 
+    # Applichiamo il calcolo
     df_master['Quantità_Calc'] = df_master.apply(lambda x: calcola_smart(x, giorni, pioggia, vento_descr, cane_presente), axis=1)
 
     # --- INTERFACCIA PRINCIPALE ---
     st.title(f"🧳 Valigia Smart: {citta}")
     
-    # SEZIONE RACCOMANDAZIONI (Richiesta specifica)
+    # SEZIONE RACCOMANDAZIONI (Le tue 9 fisse)
     with st.expander("🚨 RACCOMANDAZIONI PRE-PARTENZA (Check-list Casa)", expanded=True):
-        col1, col2 = st.columns(2)
         racc = [
             "Chiudo finestre mansarda e taverna", "Spengo NAS", "Coprire piscina",
             "Frutta in frigo giù nel sacchetto umido", "LASCIA A CASA LE COSE INUTILI",
             "BUTTA IMMONDIZIA", "PULISCI CASA e baygon (no briciole)",
             "Partire con cell carichi", "Metti antifurti, togli programmazione"
         ]
+        cols = st.columns(3)
         for i, r in enumerate(racc):
-            if i % 2 == 0: col1.checkbox(r, key=f"r_{i}")
-            else: col2.checkbox(r, key=f"r_{i}")
+            cols[i % 3].checkbox(r, key=f"r_{i}")
 
     # Filtro Piani
     piani = sorted([str(p) for p in df_master['Posiz. piano'].unique() if pd.notnull(p)])
-    f_piano = st.multiselect("📍 Filtra per Piano:", piani, default=piani)
+    f_piano = st.multiselect("📍 Filtra per Piano (es. svuota la Taverna):", piani, default=piani)
 
+    # Tabs per persone
     tabs = st.tabs(["Giorgio", "Olga", "Ilaria", "Emma", "Comune & Cane"])
     nomi_p = ["Giorgio", "Olga", "Ilaria", "Emma", "Comune"]
 
     for i, tab in enumerate(tabs):
         with tab:
-            nome = nomi_p[i]
-            if nome == "Comune":
-                # Mostra solo se proprietario è Comune o Cane (se il cane viene)
+            nome_tab = nomi_p[i]
+            if nome_tab == "Comune":
+                # Mostra Comune e Cane
                 mask = (df_master['Proprietario'] == 'Comune') | (df_master['Proprietario'].str.contains('Cane', na=False, case=False))
             else:
-                mask = (df_master['Proprietario'] == nome) | (df_master['Proprietario'] == 'Ciascuno')
+                # Mostra Singolo e Ciascuno
+                mask = (df_master['Proprietario'] == nome_tab) | (df_master['Proprietario'] == 'Ciascuno')
             
             df_tab = df_master[mask & df_master['Posiz. piano'].astype(str).isin(f_piano)].copy()
             df_tab['Stato'] = "⚪ Da fare"
@@ -138,5 +147,5 @@ if df_master is not None:
                     "Quantità_Calc": "Q.tà",
                     "Posiz. piano": "Piano"
                 },
-                hide_index=True, use_container_width=True, key=f"edit_{nome}"
+                hide_index=True, use_container_width=True, key=f"edit_{nome_tab}"
             )
