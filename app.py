@@ -4,7 +4,7 @@ from datetime import datetime, date
 import requests
 
 # CONFIGURAZIONE PAGINA
-st.set_page_config(page_title="Valigia Smart v2.5 - Famiglia Giorgio", layout="wide")
+st.set_page_config(page_title="Valigia Smart v2.6 - Famiglia Giorgio", layout="wide")
 
 # 1. FUNZIONE METEO AUTOMATICO
 def get_weather_forecast(citta):
@@ -63,8 +63,7 @@ if df_master is not None:
 
     # --- INTERFACCIA PRINCIPALE ---
     st.title(f"🧳 Valigia Smart per {citta}")
-    st.write(f"Soggiorno di **{giorni} giorni**")
-
+    
     # SEZIONE RACCOMANDAZIONI
     with st.expander("🚨 RACCOMANDAZIONI PRE-PARTENZA (Check-list Casa)", expanded=True):
         racc = [
@@ -79,57 +78,53 @@ if df_master is not None:
 
     # FILTRO PIANI
     piani = sorted([str(p) for p in df_master['Posiz. piano'].unique() if pd.notnull(p)])
-    f_piano = st.multiselect("📍 Filtra per Piano (dove sono le cose):", piani, default=piani)
+    f_piano = st.multiselect("📍 Filtra per Piano:", piani, default=piani)
 
     # --- MOTORE DI CALCOLO DINAMICO ---
     def calcola_final(row, giorni, pioggia_on, vento_livello, cane_ok):
         ogg = str(row['Oggetto']).lower()
         prop = str(row['Proprietario']).lower()
         
-        # 1. Filtro Cane (Agisce su proprietario o nome oggetto)
-        if not cane_ok and ("cane" in prop or "cane:" in ogg):
-            return 0
+        # Filtro Cane
+        if not cane_ok and ("cane" in prop or "cane:" in ogg): return 0
         
-        # 2. Filtro Alloggio
+        # Filtro Alloggio
         tipo_casa = str(row.get('Hotel / Appartamento / Entrambi', 'Entrambi')).strip()
         if alloggio == "Hotel" and tipo_casa == "Appartamento": return 0
         if alloggio == "Appartamento" and tipo_casa == "Hotel": return 0
         
-        # 3. Filtro Contesto
+        # Filtro Contesto
         contesto_row = str(row.get('Tipo viaggio / Contesto', 'Tutti'))
         if "Mare" in contesto_row and tipo_v != "Mare": return 0
         if "Montagna" in contesto_row and tipo_v != "Montagna": return 0
         
-        # 4. Quantità basate sui giorni
+        # Quantità
         if "mutande" in ogg or "calze" in ogg: return giorni + 1
         if "magliette maniche corte" in ogg:
-            # Maglie extra per Ilaria (2015) ed Emma (2017)
             return giorni + 2 if ("ilaria" in prop or "emma" in prop) else giorni
         
-        # 5. Logica Meteo (Manuale/Automatico)
+        # Meteo Override
         if ("k-way" in ogg or "ombrellino" in ogg) and not pioggia_on: return 0
         if "ombrellone" in ogg and vento_livello == "Forte": return 0
 
-        # Ritorna valore manuale se presente, altrimenti 1
         try:
             val = row['Quantità']
             return int(val) if pd.notnull(val) and val != "" else 1
         except: return 1
 
-    # --- LAYOUT TABELLE + OVERRIDE METEO ---
-    main_col, side_col = st.columns([4, 1])
+    # --- LAYOUT: METEO A SINISTRA, TABELLE A DESTRA ---
+    side_weather, main_tabs = st.columns([1, 4])
 
-    with side_col:
-        st.subheader("🌦️ Controllo Meteo")
-        st.info(f"Suggerito: {'Pioggia' if p_suggerita else 'Sole'}, Vento {v_suggerito}")
+    with side_weather:
+        st.subheader("🌦️ Meteo")
+        st.info(f"Auto: {'Pioggia' if p_suggerita else 'Sole'}, Vento {v_suggerito}")
         override_cielo = st.multiselect("Condizioni:", ["Sole", "Nuvole", "Pioggia"], 
                                        default=["Pioggia"] if p_suggerita else ["Sole"])
-        override_vento = st.select_slider("Intensità Vento:", options=["Debole", "Medio", "Forte"], 
+        override_vento = st.select_slider("Vento:", options=["Debole", "Medio", "Forte"], 
                                          value=v_suggerito)
         pioggia_attiva = "Pioggia" in override_cielo
 
-    with main_col:
-        # Applichiamo il calcolo con le variabili manuali
+    with main_tabs:
         df_master['Quantità_Calc'] = df_master.apply(
             lambda x: calcola_final(x, giorni, pioggia_attiva, override_vento, cane_presente), axis=1
         )
