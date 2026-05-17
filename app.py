@@ -46,7 +46,7 @@ def reset_tutto():
     if os.path.exists(FILE_SALVATAGGIO):
         os.remove(FILE_SALVATAGGIO)
     st.session_state.clear()
-    st.rerun()
+    # Rimossa la riga st.rerun() per evitare l'avviso "no-op"
 
 # --- RECUPERO IMPOSTAZIONI SALVATE ---
 impostazioni_salvate = st.session_state.dati_salvati.get("impostazioni", {})
